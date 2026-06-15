@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Model weights (large files, keep separately)
+*.pth
+*.pt
+
+# Training logs (keep folder, ignore contents)
+runs/*
+!runs/.gitkeep
+
+# Predictions output (keep folder, ignore contents)
+predictions/*
+!predictions/.gitkeep
+
+# Data (managed by user on server)
+training_data/*.nii
+training_data/*.nii.gz
+test_data/*.nii
+test_data/*.nii.gz
+!training_data/.gitkeep
+!test_data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

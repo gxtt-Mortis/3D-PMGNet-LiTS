@@ -34,3 +34,4 @@ test_data/*.nii.gz
 # OS
 .DS_Store
 Thumbs.db
+~*

@@ -347,7 +347,7 @@ def main():
         # 提取 case_id: test-volume-0.nii / volume-0.nii → "0"
         base = fname.replace("test-volume-", "").replace("volume-", "")
         case_id = base.split(".nii")[0]
-        out_name = f"segmentation-{case_id}.nii"
+        out_name = f"test-pre-segmentation-{case_id}.nii"
         save_path = os.path.join(args.output_dir, out_name)
 
         predict_single(

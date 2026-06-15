@@ -325,14 +325,15 @@ def main():
                                            weights_only=True))
     tumor_model.eval()
 
-    # ---- 扫描测试文件 ----
+    # ---- 扫描测试文件 (支持 volume- 和 test-volume- 两种前缀) ----
     test_files = sorted([
         f for f in os.listdir(args.input_dir)
-        if f.startswith("volume-") and f.endswith((".nii", ".nii.gz"))
+        if f.endswith((".nii", ".nii.gz"))
+        and (f.startswith("test-volume-") or f.startswith("volume-"))
     ])
 
     if not test_files:
-        print(f"[ERROR] 在 {args.input_dir} 中未找到 volume-*.nii 文件")
+        print(f"[ERROR] 在 {args.input_dir} 中未找到 volume-*.nii 或 test-volume-*.nii 文件")
         return
 
     print(f"\n找到 {len(test_files)} 个测试文件:")
@@ -343,8 +344,9 @@ def main():
     print("\n开始推理...")
     for fname in tqdm(test_files, desc="Predicting"):
         ct_path = os.path.join(args.input_dir, fname)
-        # 输出命名: volume-0.nii → segmentation-0.nii (LiTS 格式)
-        case_id = fname.replace("volume-", "").split(".nii")[0]
+        # 提取 case_id: test-volume-0.nii / volume-0.nii → "0"
+        base = fname.replace("test-volume-", "").replace("volume-", "")
+        case_id = base.split(".nii")[0]
         out_name = f"segmentation-{case_id}.nii"
         save_path = os.path.join(args.output_dir, out_name)
 

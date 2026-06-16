@@ -1,0 +1,16 @@
+training_data
+test_data
+models
+predictions
+runs
+.git
+*.pth
+*.pt
+*.nii
+*.nii.gz
+*.zip
+*.tar
+*.tar.gz
+__pycache__
+.vscode
+.DS_Store

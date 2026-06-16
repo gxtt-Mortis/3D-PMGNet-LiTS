@@ -35,3 +35,4 @@ test_data/*.nii.gz
 .DS_Store
 Thumbs.db
 ~*
+offline_packages/

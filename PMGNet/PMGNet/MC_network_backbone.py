@@ -134,7 +134,7 @@ class PMGNet(nn.Module):
             prob1 = self.mc_refine_prob(enc1, self.refine1)
         else:
             prob1 = F.softmax(enc1, dim=1)
-        re_enc1 = ProbPromptFusion()(enc1, prob1)
+        re_enc1 = enc1 + prob1     # 128³ 高分辨率，用加法省显存
 
         enc2 = self.encoder2(outs[0])
         # prob2 = F.softmax(enc2, dim=1)

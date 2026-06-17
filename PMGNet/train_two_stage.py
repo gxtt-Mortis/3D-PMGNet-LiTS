@@ -189,27 +189,13 @@ class StageTrainer:
     # ----------------------------------------------------------------
     #  Train / Val
     # ----------------------------------------------------------------
-    def _get_loss_mask(self, batch):
-        """肿瘤阶段返回肝脏 mask 用于 Dice 过滤"""
+    def _apply_loss_mask(self, lbls, batch):
+        """肿瘤阶段：肝脏外 label=-100，CE 自动忽略"""
         if self.stage == "tumor" and "liver_mask" in batch:
-            return batch["liver_mask"].squeeze(1).to(self.device)
-        return None
-
-    def _masked_dice(self, out, lbls, mask):
-        """Dice loss 只在 mask>0 区域计算。"""
-        prob = F.softmax(out, dim=1)
-        target = F.one_hot(lbls.long(), num_classes=self.out_chans).permute(0,4,1,2,3).float()
-        m = mask.unsqueeze(1)  # (B,1,D,H,W)
-        prob, target = prob * m, target * m
-        # 逐类 Dice
-        dice = 0.0; count = 0
-        for c in range(1, self.out_chans):
-            inter = (prob[:,c] * target[:,c]).sum()
-            union = prob[:,c].sum() + target[:,c].sum()
-            if union > 0:
-                dice += 1 - (2*inter + 1e-5) / (union + 1e-5)
-                count += 1
-        return dice / max(count, 1)
+            mask = batch["liver_mask"].squeeze(1).to(self.device)
+            lbls = lbls.clone()
+            lbls[mask == 0] = -100
+        return lbls
 
     def _compute_metrics_masked(self, pred, tgt, batch):
         """肿瘤阶段：只在肝脏区域算 dice"""
@@ -243,20 +229,13 @@ class StageTrainer:
         for batch in pbar:
             imgs = batch["image"].to(self.device)
             lbls = batch["label"].squeeze(1).to(self.device)
-            liver_mask = self._get_loss_mask(batch)
-
+            # 肿瘤：CE 只在肝脏区域算（-100 ignore），Dice 全图算
+            lbls_ce = self._apply_loss_mask(lbls, batch)
             self.optimizer.zero_grad()
             with autocast():
                 out = self.model(imgs)
-                if liver_mask is not None:
-                    # 肿瘤阶段：Dice 用 mask 过滤，CE 用 -100 ignore
-                    loss_d = self._masked_dice(out, lbls, liver_mask)
-                    lbls_ce = lbls.clone(); lbls_ce[liver_mask == 0] = -100
-                    loss_ce = self.ce_loss(out, lbls_ce)
-                else:
-                    loss_d = self.dice_loss(out, lbls.unsqueeze(1))
-                    loss_ce = self.ce_loss(out, lbls)
-                loss = self.alpha * loss_d + (1 - self.alpha) * loss_ce
+                loss = self.alpha * self.dice_loss(out, lbls.unsqueeze(1)) \
+                       + (1 - self.alpha) * self.ce_loss(out, lbls_ce)
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()

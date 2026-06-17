@@ -52,7 +52,7 @@ class PromptEncoder(nn.Module):
 
     def __init__(self, in_ch: int):
         super().__init__()
-        embed_dim = in_ch       # 不翻倍通道，节省显存
+        embed_dim = in_ch * 2
         self.conv = nn.Sequential(
             nn.Conv3d(in_ch, embed_dim // 2, kernel_size=3, padding=1),
             nn.GroupNorm(num_groups=min(4, embed_dim // 2),
@@ -119,7 +119,7 @@ class ProbPromptFusion(nn.Module):
             device = B.device
             self.encoder = PromptEncoder(in_ch=in_ch).to(device)
             self.gate = SpatialGate(feat_dim=feat_dim,
-                                    prompt_dim=in_ch).to(device)
+                                    prompt_dim=in_ch * 2).to(device)
 
 
         E_B = self.encoder(B)

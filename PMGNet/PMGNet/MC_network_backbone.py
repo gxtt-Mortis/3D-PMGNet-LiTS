@@ -39,10 +39,10 @@ class Fuseblock(nn.Module):
             skip = F.interpolate(skip, size=out.shape[2:],
                                  mode="trilinear", align_corners=False)
         if self.simple_fusion:
-            # 高分辨率时用简单加法，避免 PosFuse OOM
             return out + skip
         else:
-            return self.fusion(out, skip)
+            return torch.utils.checkpoint.checkpoint(
+                self.fusion, out, skip, use_reentrant=False)
 class PMGNet(nn.Module):
     def __init__(
         self,
@@ -89,8 +89,7 @@ class PMGNet(nn.Module):
         self.decoder5 = Fuseblock(spatial_dims, hidden_size, feat_size[3], 3, 2, norm_name, res_block)
         self.decoder4 = Fuseblock(spatial_dims, feat_size[3], feat_size[2], 3, 2, norm_name, res_block)
         self.decoder3 = Fuseblock(spatial_dims, feat_size[2], feat_size[1], 3, 2, norm_name, res_block)
-        self.decoder2 = Fuseblock(spatial_dims, feat_size[1], feat_size[0], 3, 2, norm_name, res_block,
-                                  simple_fusion=True)    # 128³ 高分辨率不用 attention，省显存
+        self.decoder2 = Fuseblock(spatial_dims, feat_size[1], feat_size[0], 3, 2, norm_name, res_block)
         self.decoder1 = UnetrBasicBlock(spatial_dims, feat_size[0], feat_size[0], 3, 1, norm_name, res_block)
 
         self.out = UnetOutBlock(spatial_dims, feat_size[0], out_chans)
@@ -134,7 +133,8 @@ class PMGNet(nn.Module):
             prob1 = self.mc_refine_prob(enc1, self.refine1)
         else:
             prob1 = F.softmax(enc1, dim=1)
-        re_enc1 = enc1 + prob1     # 128³ 高分辨率，用加法省显存
+        re_enc1 = torch.utils.checkpoint.checkpoint(
+            ProbPromptFusion(), enc1, prob1, use_reentrant=False)
 
         enc2 = self.encoder2(outs[0])
         # prob2 = F.softmax(enc2, dim=1)
@@ -143,21 +143,24 @@ class PMGNet(nn.Module):
             prob2 = self.mc_refine_prob(enc2, self.refine2)
         else:
             prob2 = F.softmax(enc2, dim=1)
-        re_enc2 = ProbPromptFusion()(enc2, prob2)
+        re_enc2 = torch.utils.checkpoint.checkpoint(
+            ProbPromptFusion(), enc2, prob2, use_reentrant=False)
 
         enc3 = self.encoder3(outs[1])
         if self.use_mc_refine:
             prob3 = self.mc_refine_prob(enc3, self.refine3)
         else:
             prob3 = F.softmax(enc3, dim=1)
-        re_enc3 = ProbPromptFusion()(enc3, prob3)
+        re_enc3 = torch.utils.checkpoint.checkpoint(
+            ProbPromptFusion(), enc3, prob3, use_reentrant=False)
 
         enc4 = self.encoder4(outs[2])
         if self.use_mc_refine:
             prob4 = self.mc_refine_prob(enc4, self.refine4)
         else:
             prob4 = F.softmax(enc4, dim=1)
-        re_enc4 = ProbPromptFusion()(enc4, prob4)
+        re_enc4 = torch.utils.checkpoint.checkpoint(
+            ProbPromptFusion(), enc4, prob4, use_reentrant=False)
 
         enc_hidden = self.encoder5(outs[3])
 

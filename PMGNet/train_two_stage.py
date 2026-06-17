@@ -74,6 +74,7 @@ class StageTrainer:
         resume: bool = False,
         patience: int = 0,         # 早停：连续无改善 epoch 数，0=禁用
         min_delta: float = 0.001,  # 视为改善的最小 dice 提升
+        use_mc_refine: bool = True, # MC+Refine 概率模块，batch>1 需关闭
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.stage = stage; self.out_chans = out_chans
@@ -81,6 +82,7 @@ class StageTrainer:
         self.model_path = model_path; self.log_dir = log_dir
         self.lr = lr
         self.patience = patience; self.min_delta = min_delta
+        self.use_mc_refine = use_mc_refine
 
         os.makedirs(log_dir, exist_ok=True)
         self.ckpt_path = os.path.join(log_dir, "checkpoint.pth")
@@ -88,7 +90,8 @@ class StageTrainer:
         # ---- Model ----
         self.model = PMGNet(in_chans=in_chans, out_chans=out_chans,
                             depths=[2,2,2,2], feat_size=[48,96,192,384],
-                            spatial_dims=3).to(self.device)
+                            spatial_dims=3,
+                            use_mc_refine=use_mc_refine).to(self.device)
 
         # ---- Datasets ----
         ds_kwargs = dict(data_dir=data_dir, stage=stage, val_ratio=val_ratio,
@@ -124,6 +127,7 @@ class StageTrainer:
 
         print(f"[{stage.upper()}] Device: {self.device}  |  "
               f"In: {in_chans}  Out: {out_chans}  |  "
+              f"MC+Refine: {use_mc_refine}  |  "
               f"Train: {len(train_ds)}  Val: {len(val_ds)}  |  "
               f"Start epoch: {self.start_epoch}")
 
@@ -314,6 +318,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true",
                         help="从断点续训")
+    parser.add_argument("--no_mc_refine", action="store_true",
+                        help="禁用 MC+Refine，允许 batch>1 (牺牲少量精度换速度)")
     parser.add_argument("--patience", type=int, default=50,
                         help="早停耐心值，0=禁用 (default: 50)")
     parser.add_argument("--min_delta", type=float, default=0.001,
@@ -331,7 +337,8 @@ def main():
                   batch_size=args.batch_size, alpha=args.alpha,
                   num_workers=args.num_workers, val_ratio=args.val_ratio,
                   seed=args.seed, roi_crop=roi_crop, resume=args.resume,
-                  patience=args.patience, min_delta=args.min_delta)
+                  patience=args.patience, min_delta=args.min_delta,
+                  use_mc_refine=not args.no_mc_refine)
 
     if args.stage in ("liver", "all"):
         StageTrainer(**common, **STAGE1_CONFIG).run()

@@ -251,17 +251,11 @@ class LiTSDataset(Dataset):
         return arr
 
     def _pad_or_crop(self, x: torch.Tensor, target_shape: tuple):
-        """Pad 到 target_shape（至少），大体积随机裁剪，对齐到 16。
-        上限 128³ 防止 OOM，超过则随机裁到 128。"""
+        """随机裁剪 + 对称 pad 到 target_shape (默认96³)。小体积补零，大体积每epoch随机裁不同区域。"""
         _, d0, h0, w0 = x.shape
         _, dt, ht, wt = target_shape
-        MAX_DIM = 128  # 24GB 显存上限
 
-        # 对齐到 16，上限 128
-        to_16 = lambda v, base: min(((max(v, base) + 15) // 16) * 16, MAX_DIM)
-        dt, ht, wt = to_16(d0, dt), to_16(h0, ht), to_16(w0, wt)
-
-        # 超过目标尺寸 → 随机裁
+        # 随机裁剪
         if d0 > dt:
             sd = np.random.randint(0, d0 - dt + 1)
             x = x[:, sd:sd + dt, :, :]
@@ -272,7 +266,7 @@ class LiTSDataset(Dataset):
             sw = np.random.randint(0, w0 - wt + 1)
             x = x[:, :, :, sw:sw + wt]
 
-        # 不足 → 对称 pad
+        # 对称 pad
         pad_d = max(dt - x.shape[1], 0); pad_h = max(ht - x.shape[2], 0); pad_w = max(wt - x.shape[3], 0)
         pad_cfg = (
             pad_w // 2, pad_w - pad_w // 2,

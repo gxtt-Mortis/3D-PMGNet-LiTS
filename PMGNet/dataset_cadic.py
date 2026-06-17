@@ -250,26 +250,18 @@ class LiTSDataset(Dataset):
             arr = data.transpose(2, 1, 0)  # (X, Y, Z) → (Z, Y, X) = (D, H, W)
         return arr
 
-    def _pad_or_crop(self, x: torch.Tensor, target_shape: tuple):
-        """中心裁剪 + 对称 pad 到 target_shape。x: (C, D, H, W)"""
+    def _pad_or_crop(self, x: torch.Tensor, target_shape: tuple, random_crop: bool = False):
+        """只 pad 不裁：pad 到至少 target_shape，且各维度对齐到 16 的倍数（模型下采样需要）。
+        超过 target_shape 的维度不裁，保留完整信息。"""
         _, d0, h0, w0 = x.shape
         _, dt, ht, wt = target_shape
 
-        # 中心裁剪
-        if d0 > dt:
-            sd = (d0 - dt) // 2
-            x = x[:, sd:sd + dt, :, :]
-        if h0 > ht:
-            sh = (h0 - ht) // 2
-            x = x[:, :, sh:sh + ht, :]
-        if w0 > wt:
-            sw = (w0 - wt) // 2
-            x = x[:, :, :, sw:sw + wt]
+        # 目标尺寸 = max(实际尺寸, 默认尺寸)，对齐到 16
+        to_16 = lambda v, base: ((max(v, base) + 15) // 16) * 16
+        dt, ht, wt = to_16(d0, dt), to_16(h0, ht), to_16(w0, wt)
 
         # 对称 pad
-        pad_d = max(dt - x.shape[1], 0)
-        pad_h = max(ht - x.shape[2], 0)
-        pad_w = max(wt - x.shape[3], 0)
+        pad_d = max(dt - d0, 0); pad_h = max(ht - h0, 0); pad_w = max(wt - w0, 0)
         pad_cfg = (
             pad_w // 2, pad_w - pad_w // 2,
             pad_h // 2, pad_h - pad_h // 2,

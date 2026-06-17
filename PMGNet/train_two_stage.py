@@ -72,12 +72,15 @@ class StageTrainer:
         log_dir: str = "runs/default",
         roi_crop: tuple = (20, 428, 92, 418),
         resume: bool = False,
+        patience: int = 0,         # 早停：连续无改善 epoch 数，0=禁用
+        min_delta: float = 0.001,  # 视为改善的最小 dice 提升
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.stage = stage; self.out_chans = out_chans
         self.epochs = epochs; self.alpha = alpha
         self.model_path = model_path; self.log_dir = log_dir
         self.lr = lr
+        self.patience = patience; self.min_delta = min_delta
 
         os.makedirs(log_dir, exist_ok=True)
         self.ckpt_path = os.path.join(log_dir, "checkpoint.pth")
@@ -109,6 +112,7 @@ class StageTrainer:
         self.writer = SummaryWriter(log_dir=log_dir)
         self.start_epoch = 1
         self.best_dice = 0.0
+        self.no_improve = 0       # 早停计数
         self.history = {"stage": stage, "epoch": [], "train_loss": [], "val_dice": []}
 
         # ---- Resume ----
@@ -133,6 +137,7 @@ class StageTrainer:
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scaler_state_dict": self.scaler.state_dict(),
             "best_dice": self.best_dice,
+            "no_improve": self.no_improve,
             "history": self.history,
         }, self.ckpt_path)
 
@@ -156,6 +161,7 @@ class StageTrainer:
         self.scaler.load_state_dict(ckpt["scaler_state_dict"])
         self.best_dice = ckpt["best_dice"]
         self.history   = ckpt.get("history", self.history)
+        self.no_improve = ckpt.get("no_improve", 0)
         self.start_epoch = ckpt["epoch"] + 1
         print(f"[Resume] 从 epoch {self.start_epoch} 继续, best_dice={self.best_dice:.4f}")
 
@@ -257,10 +263,18 @@ class StageTrainer:
             print(f"              Val   [{val_str}]")
 
             # ---- Save best ----
-            if avg_dice > self.best_dice:
+            if avg_dice > self.best_dice + self.min_delta:
                 self.best_dice = avg_dice
+                self.no_improve = 0
                 torch.save(self.model.state_dict(), self.model_path)
                 print(f"  >> Best model saved (avg Dice: {avg_dice:.4f})")
+            else:
+                self.no_improve += 1
+
+            # ---- 早停 ----
+            if self.patience > 0 and self.no_improve >= self.patience:
+                print(f"\n[EarlyStop] {self.patience} 个 epoch 无改善，停止训练。")
+                break
 
             # ---- 每个 epoch 保存断点 + history ----
             self._save_checkpoint(epoch)
@@ -300,6 +314,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true",
                         help="从断点续训")
+    parser.add_argument("--patience", type=int, default=50,
+                        help="早停耐心值，0=禁用 (default: 50)")
+    parser.add_argument("--min_delta", type=float, default=0.001,
+                        help="早停最小改善阈值 (default: 0.001)")
     parser.add_argument("--roi_crop", type=int, nargs=4,
                         default=[20, 428, 92, 418])
     parser.add_argument("--liver_model", type=str,
@@ -312,7 +330,8 @@ def main():
     common = dict(data_dir=args.data_dir, epochs=args.epochs, lr=args.lr,
                   batch_size=args.batch_size, alpha=args.alpha,
                   num_workers=args.num_workers, val_ratio=args.val_ratio,
-                  seed=args.seed, roi_crop=roi_crop, resume=args.resume)
+                  seed=args.seed, roi_crop=roi_crop, resume=args.resume,
+                  patience=args.patience, min_delta=args.min_delta)
 
     if args.stage in ("liver", "all"):
         StageTrainer(**common, **STAGE1_CONFIG).run()

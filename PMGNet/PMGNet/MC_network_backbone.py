@@ -16,10 +16,10 @@ class Fuseblock(nn.Module):
                  kernel_size,
                  upsample_kernel_size,
                  norm_name,
-                 res_block: bool = False):
+                 res_block: bool = False,
+                 simple_fusion: bool = False):     # 高分辨率时用简单加法
         super().__init__()
         upsample_stride = upsample_kernel_size
-        # 转置卷积上采样 hidden
         self.transp_conv = get_conv_layer(
             spatial_dims,
             in_channels,
@@ -29,24 +29,20 @@ class Fuseblock(nn.Module):
             conv_only=True,
             is_transposed=True,
         )
-        # 用 ProbPromptFusion 做融合
-        self.fusion = ProbPromptFusion()
+        self.simple_fusion = simple_fusion
+        if not simple_fusion:
+            self.fusion = ProbPromptFusion()
 
     def forward(self, inp, skip):
-        # inp: [B, in_channels, D1, H1, W1]
-        # skip: [B, skip_channels, D2, H2, W2]
-        # 1) 上采样 hidden
-        out = self.transp_conv(inp)  # [B, out_channels, D1*2, H1*2, W1*2]
-        # 2) 对齐 skip 的空间尺寸到 out
+        out = self.transp_conv(inp)
         if skip.shape[2:] != out.shape[2:]:
-            skip = F.interpolate(
-                skip,
-                size=out.shape[2:],       # (D_out, H_out, W_out)
-                mode="trilinear",
-                align_corners=False,
-            )
-        # 3) 融合并返回
-        return self.fusion(out, skip)
+            skip = F.interpolate(skip, size=out.shape[2:],
+                                 mode="trilinear", align_corners=False)
+        if self.simple_fusion:
+            # 高分辨率时用简单加法，避免 PosFuse OOM
+            return out + skip
+        else:
+            return self.fusion(out, skip)
 class PMGNet(nn.Module):
     def __init__(
         self,
@@ -93,7 +89,8 @@ class PMGNet(nn.Module):
         self.decoder5 = Fuseblock(spatial_dims, hidden_size, feat_size[3], 3, 2, norm_name, res_block)
         self.decoder4 = Fuseblock(spatial_dims, feat_size[3], feat_size[2], 3, 2, norm_name, res_block)
         self.decoder3 = Fuseblock(spatial_dims, feat_size[2], feat_size[1], 3, 2, norm_name, res_block)
-        self.decoder2 = Fuseblock(spatial_dims, feat_size[1], feat_size[0], 3, 2, norm_name, res_block)
+        self.decoder2 = Fuseblock(spatial_dims, feat_size[1], feat_size[0], 3, 2, norm_name, res_block,
+                                  simple_fusion=True)    # 128³ 高分辨率不用 attention，省显存
         self.decoder1 = UnetrBasicBlock(spatial_dims, feat_size[0], feat_size[0], 3, 1, norm_name, res_block)
 
         self.out = UnetOutBlock(spatial_dims, feat_size[0], out_chans)

@@ -23,8 +23,9 @@ from PMGNet.MC_network_backbone import PMGNet
 HU_MIN, HU_MAX = -160, 240
 ROI_ROW = (20, 428)
 ROI_COL = (92, 418)
-PATCH_SIZE = (128, 128, 128)       # (D, H, W)
+PATCH_SIZE = (96, 96, 96)          # (D, H, W) — 与训练一致
 OVERLAP = 0.5                       # 滑动窗口重叠比例
+TARGET_SPACING = (1.0, 1.0, 1.0)   # 各向同性重采样
 
 
 def load_nifti(path: str) -> np.ndarray:

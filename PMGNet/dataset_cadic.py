@@ -8,10 +8,11 @@ import SimpleITK as sitk
 import nibabel as nib
 from torch.utils.data import Dataset
 
-DEFAULT_TARGET_SHAPE = (1, 128, 128, 128)
+DEFAULT_TARGET_SHAPE = (1, 96, 96, 96)       # 96³ patch，比128³省近一半显存
 
 # --- 预处理参数 ---
 HU_MIN, HU_MAX = -160, 240          # HU 裁剪范围（肝脏软组织窗）
+TARGET_SPACING = (1.0, 1.0, 1.0)    # 各向同性重采样间距 (Z, Y, X) mm
 
 
 class LiTSDataset(Dataset):
@@ -123,8 +124,12 @@ class LiTSDataset(Dataset):
         img_path = self._find_file("volume", case)
         seg_path = self._find_file("segmentation", case)
 
-        img = self._load_nifti(img_path)   # (D, H, W), float32
-        seg = self._load_nifti(seg_path)   # (D, H, W), int
+        # 加载并重采样到各向同性间距
+        img_sitk = self._load_sitk(img_path)
+        seg_sitk = self._load_sitk(seg_path)
+        img_sitk, seg_sitk = self._resample_isotropic(img_sitk, seg_sitk, TARGET_SPACING)
+        img = self._sitk_to_array(img_sitk)   # (D, H, W), float32
+        seg = self._sitk_to_array(seg_sitk)   # (D, H, W)
 
         # --- 预处理1: HU 裁剪 + 归一化 ---
         img = self._hu_clip_normalize(img)   # [-160, 240] → [0, 1]
@@ -170,6 +175,49 @@ class LiTSDataset(Dataset):
         img = np.clip(img, HU_MIN, HU_MAX)
         img = (img - HU_MIN) / (HU_MAX - HU_MIN)
         return img.astype(np.float32)
+
+    def _load_sitk(self, path: str):
+        """加载为 SimpleITK 对象（保留 spacing 信息用于重采样）。"""
+        try:
+            return sitk.ReadImage(path)
+        except Exception:
+            nb = nib.load(path)
+            data = nb.get_fdata(dtype=np.float32)
+            data = data.transpose(2, 1, 0)  # → (D, H, W)
+            img = sitk.GetImageFromArray(data.astype(np.float32))
+            # 从 nibabel header 读取 spacing
+            zooms = nb.header.get_zooms()[:3]  # (X, Y, Z)
+            img.SetSpacing((float(zooms[2]), float(zooms[1]), float(zooms[0])))
+            return img
+
+    def _resample_isotropic(self, img_sitk, seg_sitk, target_spacing):
+        """重采样到各向同性间距。CT 用线性插值，标签用最近邻。"""
+        orig_spacing = img_sitk.GetSpacing()      # (Z, Y, X)
+        orig_size = img_sitk.GetSize()             # (Z, Y, X)
+
+        if orig_spacing == target_spacing:
+            return img_sitk, seg_sitk
+
+        new_size = [int(osz * osp / tsp + 0.5)
+                    for osz, osp, tsp in zip(orig_size, orig_spacing, target_spacing)]
+
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetSize(new_size)
+        resampler.SetOutputSpacing(target_spacing)
+        resampler.SetOutputOrigin(img_sitk.GetOrigin())
+        resampler.SetOutputDirection(img_sitk.GetDirection())
+
+        resampler.SetInterpolator(sitk.sitkLinear)
+        new_img = resampler.Execute(img_sitk)
+
+        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+        new_seg = resampler.Execute(seg_sitk)
+
+        return new_img, new_seg
+
+    def _sitk_to_array(self, sitk_img) -> np.ndarray:
+        """SimpleITK → numpy (D, H, W) float32"""
+        return sitk.GetArrayFromImage(sitk_img)
 
     def _load_nifti(self, path: str) -> np.ndarray:
         """加载 NIfTI，统一输出 (D, H, W) float32"""

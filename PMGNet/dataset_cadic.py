@@ -12,7 +12,6 @@ DEFAULT_TARGET_SHAPE = (1, 96, 96, 96)       # 96³ patch，比128³省近一半
 
 # --- 预处理参数 ---
 HU_MIN, HU_MAX = -160, 240          # HU 裁剪范围（肝脏软组织窗）
-TARGET_SPACING = (1.0, 1.0, 1.0)    # 各向同性重采样间距 (Z, Y, X) mm
 
 
 class LiTSDataset(Dataset):
@@ -124,12 +123,9 @@ class LiTSDataset(Dataset):
         img_path = self._find_file("volume", case)
         seg_path = self._find_file("segmentation", case)
 
-        # 加载并重采样到各向同性间距
-        img_sitk = self._load_sitk(img_path)
-        seg_sitk = self._load_sitk(seg_path)
-        img_sitk, seg_sitk = self._resample_isotropic(img_sitk, seg_sitk, TARGET_SPACING)
-        img = self._sitk_to_array(img_sitk)   # (D, H, W), float32
-        seg = self._sitk_to_array(seg_sitk)   # (D, H, W)
+        # 加载（保留原始 spacing，不做重采样以避免厚层切片暴增）
+        img = self._load_nifti(img_path)   # (D, H, W), float32
+        seg = self._load_nifti(seg_path)   # (D, H, W)
 
         # --- 预处理1: HU 裁剪 + 归一化 ---
         img = self._hu_clip_normalize(img)   # [-160, 240] → [0, 1]

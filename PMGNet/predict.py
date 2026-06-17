@@ -25,7 +25,6 @@ ROI_ROW = (20, 428)
 ROI_COL = (92, 418)
 PATCH_SIZE = (96, 96, 96)          # (D, H, W) — 与训练一致
 OVERLAP = 0.5                       # 滑动窗口重叠比例
-TARGET_SPACING = (1.0, 1.0, 1.0)   # 各向同性重采样
 
 
 def load_nifti(path: str) -> np.ndarray:

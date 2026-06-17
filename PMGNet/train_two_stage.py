@@ -188,19 +188,53 @@ class StageTrainer:
     # ----------------------------------------------------------------
     #  Train / Val
     # ----------------------------------------------------------------
+    def _apply_loss_mask(self, lbls, batch):
+        """肿瘤阶段：非肝脏区域 label 设为 -100 (CE ignore)"""
+        if self.stage == "tumor" and "liver_mask" in batch:
+            mask = batch["liver_mask"].squeeze(1).to(self.device)
+            lbls = lbls.clone()
+            lbls[mask == 0] = -100
+        return lbls
+
+    def _compute_metrics_masked(self, pred, tgt, batch):
+        """肿瘤阶段：只在肝脏区域算 dice"""
+        if self.stage == "tumor" and "liver_mask" in batch:
+            mask = batch["liver_mask"].squeeze(1).cpu().numpy().astype(bool)
+            # 对 batch 中每个样本
+            metrics = {}
+            for b in range(pred.shape[0]):
+                m = mask[b] if mask.ndim == 3 else mask
+                for c in range(1, self.out_chans):
+                    pm = (pred[b] == c) & m; tm = (tgt[b] == c) & m
+                    inter = (pm & tm).sum(); union = pm.sum() + tm.sum()
+                    k = f"dice_{c}"
+                    metrics.setdefault(k, []).append(2.0 * inter / (union + 1e-5))
+            return metrics
+        else:
+            metrics = {}
+            for b in range(pred.shape[0]):
+                for c in range(1, self.out_chans):
+                    pm = (pred[b] == c); tm = (tgt[b] == c)
+                    inter = (pm & tm).sum(); union = pm.sum() + tm.sum()
+                    k = f"dice_{c}"
+                    metrics.setdefault(k, []).append(2.0 * inter / (union + 1e-5))
+            return metrics
+
     def train_epoch(self, epoch: int) -> dict:
         self.model.train()
         total_loss = 0.0
-        acc = {f"dice_{c}": [] for c in range(1, self.out_chans)}
+        acc = {}
         pbar = tqdm(self.train_loader, desc=f"E{epoch} [Train]", leave=False)
         for batch in pbar:
             imgs = batch["image"].to(self.device)
             lbls = batch["label"].squeeze(1).to(self.device)
+            # 肿瘤阶段：loss 只在肝脏区域算
+            lbls_masked = self._apply_loss_mask(lbls, batch)
             self.optimizer.zero_grad()
             with autocast():
                 out = self.model(imgs)
-                loss = self.alpha * self.dice_loss(out, lbls.unsqueeze(1)) \
-                       + (1 - self.alpha) * self.ce_loss(out, lbls)
+                loss = self.alpha * self.dice_loss(out, lbls_masked.unsqueeze(1)) \
+                       + (1 - self.alpha) * self.ce_loss(out, lbls_masked)
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -208,9 +242,9 @@ class StageTrainer:
             with torch.no_grad():
                 pred = torch.argmax(out, dim=1).cpu().numpy()
                 tgt  = lbls.cpu().numpy()
-                for b in range(pred.shape[0]):
-                    for k, v in self.compute_metrics(pred[b], tgt[b]).items():
-                        acc[k].append(v)
+                m = self._compute_metrics_masked(pred, tgt, batch)
+                for k, v in m.items():
+                    acc.setdefault(k, []).extend(v)
             pbar.set_postfix(loss=total_loss / (pbar.n + 1))
         avg_loss = total_loss / len(self.train_loader)
         avg_m = {k: float(np.mean(v)) for k, v in acc.items()}
@@ -219,16 +253,16 @@ class StageTrainer:
     @torch.no_grad()
     def validate(self, epoch: int = None) -> dict:
         self.model.eval()
-        acc = {f"dice_{c}": [] for c in range(1, self.out_chans)}
+        acc = {}
         pbar = tqdm(self.val_loader, desc=f"E{epoch} [Val]  ", leave=False)
         for batch in pbar:
             imgs = batch["image"].to(self.device)
             lbls = batch["label"].squeeze(1).to(self.device)
             pred = torch.argmax(self.model(imgs), dim=1).cpu().numpy()
             tgt  = lbls.cpu().numpy()
-            for b in range(pred.shape[0]):
-                for k, v in self.compute_metrics(pred[b], tgt[b]).items():
-                    acc[k].append(v)
+            m = self._compute_metrics_masked(pred, tgt, batch)
+            for k, v in m.items():
+                acc.setdefault(k, []).extend(v)
         return {k: float(np.mean(v)) for k, v in acc.items()}
 
     # ----------------------------------------------------------------

@@ -134,17 +134,19 @@ class LiTSDataset(Dataset):
         # --- 预处理1: HU 裁剪 + 归一化 ---
         img = self._hu_clip_normalize(img)   # [-160, 240] → [0, 1]
 
-        # --- 预处理2: 可选 ROI 裁剪 ---
+        # --- 预处理2: ROI 裁剪（固定范围，可选） + 肝脏 bbox 动态裁剪 ---
         if self.roi_crop is not None:
             rs, re, cs, ce = self.roi_crop
             img = img[:, rs:re, cs:ce]
             seg = seg[:, rs:re, cs:ce]
 
+        # 肝脏动态裁剪: 找到肝脏 bbox + 边距，保证 focus 在肝脏区域
+        img, seg = self._liver_bbox_crop(img, seg)
+
         # --- 根据 stage 构建 label 和输入 ---
         if self.stage == "liver":
-            # 合并肝脏(1)和肿瘤(2) → 前景(1)
             seg = (seg > 0).astype(np.int64)
-            img_t = torch.from_numpy(img[None]).float()         # (1, D, H, W)
+            img_t = torch.from_numpy(img[None]).float()
             seg_t = torch.from_numpy(seg[None]).long()
 
             img_t = self._pad_or_crop(img_t, self.target_shape)
@@ -152,24 +154,47 @@ class LiTSDataset(Dataset):
             return {"image": img_t, "label": seg_t, "case_id": case}
 
         else:  # stage == "tumor"
-            # 肝脏 mask（前景=1）：合并肝脏和肿瘤区域
+            # 肝脏区域 mask
             liver_mask = (seg > 0).astype(np.float32)
-            # 肿瘤 label：仅肿瘤(2)为 1
+            # 肿瘤 label（仅肿瘤=1）
             tumor_label = (seg == 2).astype(np.int64)
 
-            # 2 通道输入: [CT, liver_mask]
-            img_2ch = np.stack([img, liver_mask], axis=0)       # (2, D, H, W)
+            # CT 在肝脏外用 0 填充（过滤无关背景信息）
+            img_masked = img * liver_mask
+
+            # 2 通道输入: [masked_CT, liver_mask]
+            img_2ch = np.stack([img_masked, liver_mask], axis=0)
             img_t = torch.from_numpy(img_2ch).float()
-            seg_t = torch.from_numpy(tumor_label[None]).long()  # (1, D, H, W)
+            seg_t = torch.from_numpy(tumor_label[None]).long()
+            # liver_mask 额外返回，供 trainer 做 loss 过滤
+            mask_t = torch.from_numpy(liver_mask[None]).float()
 
             img_t = self._pad_or_crop(img_t, self.target_shape)
             seg_t = self._pad_or_crop(seg_t, self.target_shape)
-            # liver_mask 在第 1 通道中，已随 img_t 一起 crop/pad
-            return {"image": img_t, "label": seg_t, "case_id": case}
+            mask_t = self._pad_or_crop(mask_t, self.target_shape)
+            return {"image": img_t, "label": seg_t, "liver_mask": mask_t, "case_id": case}
 
     # ----------------------------------------------------------------
     #  预处理静态方法
     # ----------------------------------------------------------------
+    def _liver_bbox_crop(self, img: np.ndarray, seg: np.ndarray,
+                          margin: int = 20) -> (np.ndarray, np.ndarray):
+        """基于肝脏 mask 动态裁剪，保证肝脏区域在视野内。无肝脏时返回原图。"""
+        fg = np.where(seg > 0)
+        if len(fg[0]) == 0:
+            return img, seg
+
+        d0, d1 = fg[0].min(), fg[0].max() + 1
+        h0, h1 = fg[1].min(), fg[1].max() + 1
+        w0, w1 = fg[2].min(), fg[2].max() + 1
+
+        D, H, W = img.shape
+        d0 = max(0, d0 - margin);  d1 = min(D, d1 + margin)
+        h0 = max(0, h0 - margin);  h1 = min(H, h1 + margin)
+        w0 = max(0, w0 - margin);  w1 = min(W, w1 + margin)
+
+        return img[d0:d1, h0:h1, w0:w1], seg[d0:d1, h0:h1, w0:w1]
+
     def _hu_clip_normalize(self, img: np.ndarray) -> np.ndarray:
         """HU 裁剪 + 归一化: [HU_MIN, HU_MAX] → [0, 1]"""
         img = np.clip(img, HU_MIN, HU_MAX)
